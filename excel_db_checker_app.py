@@ -63,8 +63,9 @@ def sanitize_table_name(name):
     return name or "reference_data"
 
 
-def build_key(row, cols):
-    return " ".join(str(row[c]) for c in cols if pd.notna(row[c]))
+def build_key(row, cols, join_with_space=True):
+    sep = " " if join_with_space else ""
+    return sep.join(str(row[c]).strip() for c in cols if pd.notna(row[c]))
 
 
 def classify(score, threshold):
@@ -136,34 +137,53 @@ elif page == "Check a File":
 
         uploaded = st.file_uploader("Upload the file that needs checking", type=["xlsx", "xls"])
         if uploaded:
-            df_check = pd.read_excel(uploaded)
-            st.success(f"Loaded {len(df_check):,} rows to check")
+            excel_file = pd.ExcelFile(uploaded)
+            sheet_names = excel_file.sheet_names
+
+            if len(sheet_names) > 1:
+                sheet_choice = st.selectbox("This file has multiple tabs — which one do you want to check?", sheet_names)
+            else:
+                sheet_choice = sheet_names[0]
+
+            df_check = pd.read_excel(excel_file, sheet_name=sheet_choice)
+            st.success(f"Loaded {len(df_check):,} rows from tab '{sheet_choice}'")
             st.dataframe(df_check.head(5), use_container_width=True)
 
             col1, col2 = st.columns(2)
             with col1:
                 cols_check = st.multiselect(
                     "Column(s) from uploaded file to compare",
-                    options=list(df_check.columns)
+                    options=list(df_check.columns),
+                    help="e.g. select Last Name, First Name, Middle Name together"
+                )
+                join_check_no_space = st.checkbox(
+                    "Join these without spaces (e.g. LastFirstMiddle)",
+                    key="join_check"
                 )
             with col2:
                 cols_ref = st.multiselect(
                     "Column(s) from reference table to compare",
                     options=list(df_ref.columns)
                 )
+                join_ref_no_space = st.checkbox(
+                    "Join these without spaces",
+                    key="join_ref"
+                )
 
             threshold = st.slider("Partial match threshold (%)", 0, 100, 50)
 
             if cols_check and cols_ref and st.button("Run Cross-Check", type="primary"):
                 df_ref_local = df_ref.copy()
-                df_ref_local["_match_key"] = df_ref_local.apply(lambda r: build_key(r, cols_ref), axis=1)
+                df_ref_local["_match_key"] = df_ref_local.apply(
+                    lambda r: build_key(r, cols_ref, join_with_space=not join_ref_no_space), axis=1
+                )
 
                 results = []
                 progress = st.progress(0, text="Comparing rows...")
                 total = len(df_check)
 
                 for i, (idx, row) in enumerate(df_check.iterrows()):
-                    key1 = build_key(row, cols_check)
+                    key1 = build_key(row, cols_check, join_with_space=not join_check_no_space)
 
                     if not key1.strip():
                         results.append({

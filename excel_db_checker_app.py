@@ -223,9 +223,9 @@ elif page == "Check a File":
 
                 def highlight_status(row):
                     color = {
-                        "Exact Match": "background-color: #d4edda",
-                        "Partial Match": "background-color: #fff3cd",
-                        "No Match": "background-color: #f8d7da",
+                        "Exact Match": "background-color: #1b4332; color: #d8f3dc",
+                        "Partial Match": "background-color: #4a3b00; color: #ffe8a3",
+                        "No Match": "background-color: #4a1420; color: #ffd6de",
                     }.get(row["Status"], "")
                     return [color] * len(row)
 

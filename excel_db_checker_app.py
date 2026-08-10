@@ -22,6 +22,7 @@ import pandas as pd
 import streamlit as st
 from rapidfuzz import fuzz
 from sqlalchemy import create_engine, text
+from streamlit_option_menu import option_menu
 
 # ---- Database connection -----------------------------------------------------
 @st.cache_resource
@@ -85,18 +86,67 @@ def to_excel_bytes(df):
 
 
 # ---- Page setup ---------------------------------------------------------------
-st.set_page_config(page_title="Excel Cross-Checker", layout="wide")
+st.set_page_config(page_title="Excel Cross-Checker", layout="wide", page_icon="📊")
+
+st.markdown("""
+<style>
+    #MainMenu, footer {visibility: hidden;}
+    section[data-testid="stSidebar"] {
+        background-color: #12141c;
+        border-right: 1px solid #2a2d3a;
+    }
+    .app-title {
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: #fafafa;
+        padding: 1.2rem 0 0.2rem 0;
+        text-align: center;
+    }
+    .app-subtitle {
+        font-size: 0.78rem;
+        color: #8a8d98;
+        text-align: center;
+        padding-bottom: 1.2rem;
+        border-bottom: 1px solid #2a2d3a;
+        margin-bottom: 0.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown('<div class="app-title">📊 Cross-Checker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subtitle">Shared cloud database</div>', unsafe_allow_html=True)
+
+    page = option_menu(
+        menu_title=None,
+        options=["Import Data", "Check a File", "View Database"],
+        icons=["cloud-upload", "search", "table"],
+        default_index=0,
+        styles={
+            "container": {"padding": "0", "background-color": "transparent"},
+            "icon": {"color": "#f0a500", "font-size": "16px"},
+            "nav-link": {
+                "font-size": "14px",
+                "text-align": "left",
+                "margin": "4px 0",
+                "border-radius": "8px",
+                "color": "#c7c9d1",
+                "padding": "10px 14px",
+            },
+            "nav-link-selected": {
+                "background-color": "#f0a500",
+                "color": "#12141c",
+                "font-weight": "600",
+            },
+        }
+    )
+
 st.title("📊 Excel Cross-Checker")
 st.caption("Shared cloud database - changes are visible to your whole team")
 
-page = st.sidebar.radio(
-    "Menu",
-    ["Import / Update Reference Data", "Check a File", "View Database"]
-)
-
 
 # ---- Page: Import ---------------------------------------------------------------
-if page == "Import / Update Reference Data":
+if page == "Import Data":
     st.header("Import / Update Reference Data")
 
     uploaded = st.file_uploader("Upload an Excel file to import", type=["xlsx", "xls"])
@@ -228,12 +278,34 @@ elif page == "Check a File":
 
                 progress.empty()
                 results_df = pd.DataFrame(results)
+                st.session_state["results_df"] = results_df
+
+            if "results_df" in st.session_state:
+                results_df = st.session_state["results_df"]
 
                 st.subheader("Results")
+
+                filter_col1, filter_col2 = st.columns([2, 1])
+                with filter_col1:
+                    status_filter = st.multiselect(
+                        "Filter by status",
+                        options=["Exact Match", "Partial Match", "No Match"],
+                        default=["Exact Match", "Partial Match", "No Match"]
+                    )
+                with filter_col2:
+                    min_score = st.slider("Minimum match score (%)", 0, 100, 0)
+
+                filtered_df = results_df[
+                    results_df["Status"].isin(status_filter) &
+                    (results_df["Match Score (%)"] >= min_score)
+                ]
+
                 summary = results_df["Status"].value_counts()
                 cols = st.columns(len(summary))
                 for c, (status, count) in zip(cols, summary.items()):
                     c.metric(status, count)
+
+                st.caption(f"Showing {len(filtered_df):,} of {len(results_df):,} rows")
 
                 def highlight_status(row):
                     color = {
@@ -243,11 +315,11 @@ elif page == "Check a File":
                     }.get(row["Status"], "")
                     return [color] * len(row)
 
-                st.dataframe(results_df.style.apply(highlight_status, axis=1), use_container_width=True)
+                st.dataframe(filtered_df.style.apply(highlight_status, axis=1), use_container_width=True)
 
                 st.download_button(
-                    "Download results as Excel",
-                    data=to_excel_bytes(results_df),
+                    "Download filtered results as Excel",
+                    data=to_excel_bytes(filtered_df),
                     file_name="cross_check_results.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )

@@ -227,10 +227,38 @@ elif page == "View Database":
     if not tables:
         st.info("Database is empty. Go to 'Import / Update Reference Data' first.")
     else:
-        for t in tables:
-            with st.expander(f"📋 {t} ({table_row_count(t):,} rows)"):
-                preview = pd.read_sql(f'SELECT * FROM "{t}" LIMIT 20', engine)
-                st.dataframe(preview, use_container_width=True)
+        table_name = st.selectbox("Table to view", tables)
+        total_rows = table_row_count(table_name)
+        st.caption(f"{total_rows:,} total rows")
+
+        search_term = st.text_input(
+            "Search (matches any column, case-insensitive)",
+            placeholder="e.g. a name, barangay, or project"
+        )
+
+        @st.cache_data(ttl=300)
+        def load_full_table(name):
+            return pd.read_sql(f'SELECT * FROM "{name}"', engine)
+
+        df_full = load_full_table(table_name)
+
+        if search_term:
+            mask = df_full.apply(
+                lambda col: col.astype(str).str.contains(search_term, case=False, na=False)
+            ).any(axis=1)
+            df_display = df_full[mask]
+            st.caption(f"{len(df_display):,} rows match '{search_term}'")
+        else:
+            df_display = df_full
+
+        st.dataframe(df_display, use_container_width=True, height=600)
+
+        st.download_button(
+            "Download this view as Excel",
+            data=to_excel_bytes(df_display),
+            file_name=f"{table_name}_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # ---------------------------------------------------------------------------
 # secrets.toml format (for local testing only - on Streamlit Cloud this goes

@@ -170,6 +170,14 @@ elif page == "Check a File":
                     key="join_ref"
                 )
 
+            default_extra = ["PROJECT"] if "PROJECT" in df_ref.columns else []
+            extra_cols = st.multiselect(
+                "Additional column(s) from the database to include in the results",
+                options=[c for c in df_ref.columns if c not in cols_ref],
+                default=default_extra,
+                help="e.g. Project, so you can see what each matched person is tied to"
+            )
+
             threshold = st.slider("Partial match threshold (%)", 0, 100, 50)
 
             if cols_check and cols_ref and st.button("Run Cross-Check", type="primary"):
@@ -186,28 +194,34 @@ elif page == "Check a File":
                     key1 = build_key(row, cols_check, join_with_space=not join_check_no_space)
 
                     if not key1.strip():
-                        results.append({
+                        base_result = {
                             "Row (Uploaded File)": idx + 2,
                             "Uploaded_Value": key1,
                             "Best Match (Database)": None,
                             "Match Score (%)": 0,
                             "Status": "No Match"
-                        })
+                        }
+                        for c in extra_cols:
+                            base_result[c] = None
+                        results.append(base_result)
                     else:
-                        best_score, best_key_ref = -1, None
-                        for key_ref in df_ref_local["_match_key"]:
+                        best_score, best_idx_ref, best_key_ref = -1, None, None
+                        for idx_ref, key_ref in zip(df_ref_local.index, df_ref_local["_match_key"]):
                             score = fuzz.token_sort_ratio(key1, key_ref)
                             if score > best_score:
-                                best_score, best_key_ref = score, key_ref
+                                best_score, best_idx_ref, best_key_ref = score, idx_ref, key_ref
 
                         final_score = best_score if best_score >= 0 else 0
-                        results.append({
+                        base_result = {
                             "Row (Uploaded File)": idx + 2,
                             "Uploaded_Value": key1,
                             "Best Match (Database)": best_key_ref,
                             "Match Score (%)": round(final_score, 1),
                             "Status": classify(final_score, threshold)
-                        })
+                        }
+                        for c in extra_cols:
+                            base_result[c] = df_ref_local.at[best_idx_ref, c] if best_idx_ref is not None else None
+                        results.append(base_result)
 
                     if total:
                         progress.progress((i + 1) / total, text=f"Comparing rows... {i+1}/{total}")

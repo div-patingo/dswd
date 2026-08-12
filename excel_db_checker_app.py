@@ -199,55 +199,74 @@ elif page == "Check a File":
             st.success(f"Loaded {len(df_check):,} rows from tab '{sheet_choice}'")
             st.dataframe(df_check.head(5), use_container_width=True)
 
+            st.markdown("**Match on separate name fields, weighted by importance**")
             col1, col2 = st.columns(2)
             with col1:
-                cols_check = st.multiselect(
-                    "Column(s) from uploaded file to compare",
-                    options=list(df_check.columns),
-                    help="e.g. select Last Name, First Name, Middle Name together"
-                )
-                join_check_no_space = st.checkbox(
-                    "Join these without spaces (e.g. LastFirstMiddle)",
-                    key="join_check"
+                st.markdown("*Uploaded file columns*")
+                last_check = st.selectbox("Last Name column", df_check.columns, key="last_check")
+                first_check = st.selectbox("First Name column", df_check.columns, key="first_check")
+                middle_check = st.selectbox(
+                    "Middle Name column (optional)",
+                    ["(none)"] + list(df_check.columns), key="middle_check"
                 )
             with col2:
-                cols_ref = st.multiselect(
-                    "Column(s) from reference table to compare",
-                    options=list(df_ref.columns)
+                st.markdown("*Reference table columns*")
+                last_ref = st.selectbox("Last Name column", df_ref.columns, key="last_ref")
+                first_ref = st.selectbox("First Name column", df_ref.columns, key="first_ref")
+                middle_ref = st.selectbox(
+                    "Middle Name column (optional)",
+                    ["(none)"] + list(df_ref.columns), key="middle_ref"
                 )
-                join_ref_no_space = st.checkbox(
-                    "Join these without spaces",
-                    key="join_ref"
-                )
+
+            use_middle = middle_check != "(none)" and middle_ref != "(none)"
+
+            st.markdown("**Field weights** (how much each field counts toward the final score)")
+            w1, w2, w3 = st.columns(3)
+            with w1:
+                weight_last = st.slider("Last Name weight", 0, 100, 50)
+            with w2:
+                weight_first = st.slider("First Name weight", 0, 100, 30 if use_middle else 50)
+            with w3:
+                weight_middle = st.slider("Middle Name weight", 0, 100, 20 if use_middle else 0, disabled=not use_middle)
+
+            weight_total = weight_last + weight_first + (weight_middle if use_middle else 0)
+            if weight_total == 0:
+                st.warning("Weights can't all be zero.")
 
             default_extra = ["PROJECT"] if "PROJECT" in df_ref.columns else []
             extra_cols = st.multiselect(
                 "Additional column(s) from the database to include in the results",
-                options=[c for c in df_ref.columns if c not in cols_ref],
+                options=[c for c in df_ref.columns if c not in [last_ref, first_ref, middle_ref]],
                 default=default_extra,
                 help="e.g. Project, so you can see what each matched person is tied to"
             )
 
             threshold = st.slider("Partial match threshold (%)", 0, 100, 50)
 
-            if cols_check and cols_ref and st.button("Run Cross-Check", type="primary"):
+            ready = weight_total > 0
+            if ready and st.button("Run Cross-Check", type="primary"):
                 df_ref_local = df_ref.copy()
-                df_ref_local["_match_key"] = df_ref_local.apply(
-                    lambda r: build_key(r, cols_ref, join_with_space=not join_ref_no_space), axis=1
-                )
+
+                def norm(val):
+                    return str(val).strip() if pd.notna(val) else ""
 
                 results = []
                 progress = st.progress(0, text="Comparing rows...")
                 total = len(df_check)
 
                 for i, (idx, row) in enumerate(df_check.iterrows()):
-                    key1 = build_key(row, cols_check, join_with_space=not join_check_no_space)
+                    c_last = norm(row[last_check])
+                    c_first = norm(row[first_check])
+                    c_middle = norm(row[middle_check]) if use_middle else ""
 
-                    if not key1.strip():
+                    display_name = " ".join(x for x in [c_last, c_first, c_middle] if x)
+
+                    if not c_last and not c_first:
                         base_result = {
                             "Row (Uploaded File)": idx + 2,
-                            "Uploaded_Value": key1,
-                            "Best Match (Database)": None,
+                            "Uploaded_Name": display_name,
+                            "Best Match (Last Name)": None,
+                            "Best Match (First Name)": None,
                             "Match Score (%)": 0,
                             "Status": "No Match"
                         }
@@ -255,17 +274,32 @@ elif page == "Check a File":
                             base_result[c] = None
                         results.append(base_result)
                     else:
-                        best_score, best_idx_ref, best_key_ref = -1, None, None
-                        for idx_ref, key_ref in zip(df_ref_local.index, df_ref_local["_match_key"]):
-                            score = fuzz.token_sort_ratio(key1, key_ref)
-                            if score > best_score:
-                                best_score, best_idx_ref, best_key_ref = score, idx_ref, key_ref
+                        best_score, best_idx_ref = -1, None
+                        for idx_ref in df_ref_local.index:
+                            r_last = norm(df_ref_local.at[idx_ref, last_ref])
+                            r_first = norm(df_ref_local.at[idx_ref, first_ref])
+
+                            score_last = fuzz.ratio(c_last, r_last)
+                            score_first = fuzz.ratio(c_first, r_first)
+
+                            weighted = (score_last * weight_last) + (score_first * weight_first)
+
+                            if use_middle:
+                                r_middle = norm(df_ref_local.at[idx_ref, middle_ref])
+                                score_middle = fuzz.ratio(c_middle, r_middle)
+                                weighted += score_middle * weight_middle
+
+                            combined_score = weighted / weight_total
+
+                            if combined_score > best_score:
+                                best_score, best_idx_ref = combined_score, idx_ref
 
                         final_score = best_score if best_score >= 0 else 0
                         base_result = {
                             "Row (Uploaded File)": idx + 2,
-                            "Uploaded_Value": key1,
-                            "Best Match (Database)": best_key_ref,
+                            "Uploaded_Name": display_name,
+                            "Best Match (Last Name)": df_ref_local.at[best_idx_ref, last_ref] if best_idx_ref is not None else None,
+                            "Best Match (First Name)": df_ref_local.at[best_idx_ref, first_ref] if best_idx_ref is not None else None,
                             "Match Score (%)": round(final_score, 1),
                             "Status": classify(final_score, threshold)
                         }

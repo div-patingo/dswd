@@ -2,12 +2,16 @@
 """
 Excel Cross-Checker - Cloud Web UI (Streamlit + Postgres)
 -------------------------------------------------------------
-Uses a cloud Postgres database (e.g. Supabase) so it works when deployed to
+Same app as before, but uses a cloud Postgres database (e.g. Supabase's
+free tier) instead of a local SQLite file, so it works when deployed to
 Streamlit Community Cloud and data persists + is shared across users.
 
-Secrets (Streamlit Cloud: Settings -> Secrets, or .streamlit/secrets.toml locally):
+LOCAL TESTING:
+    You can still test this on your own machine by setting DB_URL in
+    .streamlit/secrets.toml (see bottom of this file for format).
 
-DB_URL = "postgresql://postgres.PROJECTREF:YOUR_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres"
+DEPLOYMENT:
+    See the setup guide provided alongside this file.
 """
 
 import re
@@ -18,10 +22,7 @@ import pandas as pd
 import streamlit as st
 from rapidfuzz import fuzz
 from sqlalchemy import create_engine, text
-
-# ---- Page setup (must be the first Streamlit call) ---------------------------
-st.set_page_config(page_title="Excel Cross-Checker", layout="wide", page_icon="📊")
-
+from streamlit_option_menu import option_menu
 
 # ---- Database connection -----------------------------------------------------
 @st.cache_resource
@@ -31,7 +32,7 @@ def get_engine():
         st.error(
             "No database connection configured. Add DB_URL to your Streamlit "
             "secrets (Settings -> Secrets on Streamlit Cloud, or "
-            ".streamlit/secrets.toml locally)."
+            ".streamlit/secrets.toml locally). See the setup guide."
         )
         st.stop()
     return create_engine(db_url, pool_pre_ping=True)
@@ -84,12 +85,9 @@ def to_excel_bytes(df):
     return buffer.getvalue()
 
 
-@st.cache_data(ttl=300)
-def load_full_table(name):
-    return pd.read_sql(f'SELECT * FROM "{name}"', engine)
+# ---- Page setup ---------------------------------------------------------------
+st.set_page_config(page_title="Excel Cross-Checker", layout="wide", page_icon="📊")
 
-
-# ---- Styling ------------------------------------------------------------------
 st.markdown("""
 <style>
     #MainMenu, footer {visibility: hidden;}
@@ -115,15 +113,32 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---- Sidebar navigation (native widget, no third-party component) ------------
 with st.sidebar:
     st.markdown('<div class="app-title">📊 Cross-Checker</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-subtitle">Shared cloud database</div>', unsafe_allow_html=True)
 
-    page = st.radio(
-        "Navigation",
-        ["Import Data", "Check a File", "View Database"],
-        label_visibility="collapsed",
+    page = option_menu(
+        menu_title=None,
+        options=["Import Data", "Check a File", "View Database"],
+        icons=["cloud-upload", "search", "table"],
+        default_index=0,
+        styles={
+            "container": {"padding": "0", "background-color": "transparent"},
+            "icon": {"color": "#f0a500", "font-size": "16px"},
+            "nav-link": {
+                "font-size": "14px",
+                "text-align": "left",
+                "margin": "4px 0",
+                "border-radius": "8px",
+                "color": "#c7c9d1",
+                "padding": "10px 14px",
+            },
+            "nav-link-selected": {
+                "background-color": "#f0a500",
+                "color": "#12141c",
+                "font-weight": "600",
+            },
+        }
     )
 
 st.title("📊 Excel Cross-Checker")
@@ -145,7 +160,7 @@ if page == "Import Data":
         table_name = st.text_input("Table name to store this data as", value=default_name)
         table_name = sanitize_table_name(table_name)
 
-        mode_label = "Replace entirely"
+        mode_label = "Replace"
         if table_name in existing:
             st.warning(f"Table '{table_name}' already exists ({table_row_count(table_name):,} rows).")
             mode_label = st.radio("What should happen?", ["Append new rows", "Replace entirely"])
@@ -154,7 +169,6 @@ if page == "Import Data":
             mode = "append" if mode_label == "Append new rows" else "replace"
             with st.spinner("Uploading to database..."):
                 df.to_sql(table_name, engine, if_exists=mode, index=False)
-            load_full_table.clear()
             st.success(f"Done! Table '{table_name}' now has {table_row_count(table_name):,} rows.")
             st.rerun()
 
@@ -165,7 +179,7 @@ elif page == "Check a File":
 
     tables = list_tables()
     if not tables:
-        st.info("Database is empty. Go to 'Import Data' first.")
+        st.info("Database is empty. Go to 'Import / Update Reference Data' first.")
     else:
         table_name = st.selectbox("Reference table to check against", tables)
         df_ref = pd.read_sql(f'SELECT * FROM "{table_name}"', engine)
@@ -177,10 +191,7 @@ elif page == "Check a File":
             sheet_names = excel_file.sheet_names
 
             if len(sheet_names) > 1:
-                sheet_choice = st.selectbox(
-                    "This file has multiple tabs — which one do you want to check?",
-                    sheet_names,
-                )
+                sheet_choice = st.selectbox("This file has multiple tabs — which one do you want to check?", sheet_names)
             else:
                 sheet_choice = sheet_names[0]
 
@@ -193,20 +204,20 @@ elif page == "Check a File":
                 cols_check = st.multiselect(
                     "Column(s) from uploaded file to compare",
                     options=list(df_check.columns),
-                    help="e.g. select Last Name, First Name, Middle Name together",
+                    help="e.g. select Last Name, First Name, Middle Name together"
                 )
                 join_check_no_space = st.checkbox(
                     "Join these without spaces (e.g. LastFirstMiddle)",
-                    key="join_check",
+                    key="join_check"
                 )
             with col2:
                 cols_ref = st.multiselect(
                     "Column(s) from reference table to compare",
-                    options=list(df_ref.columns),
+                    options=list(df_ref.columns)
                 )
                 join_ref_no_space = st.checkbox(
                     "Join these without spaces",
-                    key="join_ref",
+                    key="join_ref"
                 )
 
             default_extra = ["PROJECT"] if "PROJECT" in df_ref.columns else []
@@ -214,7 +225,7 @@ elif page == "Check a File":
                 "Additional column(s) from the database to include in the results",
                 options=[c for c in df_ref.columns if c not in cols_ref],
                 default=default_extra,
-                help="e.g. Project, so you can see what each matched person is tied to",
+                help="e.g. Project, so you can see what each matched person is tied to"
             )
 
             threshold = st.slider("Partial match threshold (%)", 0, 100, 50)
@@ -238,7 +249,7 @@ elif page == "Check a File":
                             "Uploaded_Value": key1,
                             "Best Match (Database)": None,
                             "Match Score (%)": 0,
-                            "Status": "No Match",
+                            "Status": "No Match"
                         }
                         for c in extra_cols:
                             base_result[c] = None
@@ -256,12 +267,10 @@ elif page == "Check a File":
                             "Uploaded_Value": key1,
                             "Best Match (Database)": best_key_ref,
                             "Match Score (%)": round(final_score, 1),
-                            "Status": classify(final_score, threshold),
+                            "Status": classify(final_score, threshold)
                         }
                         for c in extra_cols:
-                            base_result[c] = (
-                                df_ref_local.at[best_idx_ref, c] if best_idx_ref is not None else None
-                            )
+                            base_result[c] = df_ref_local.at[best_idx_ref, c] if best_idx_ref is not None else None
                         results.append(base_result)
 
                     if total:
@@ -281,14 +290,14 @@ elif page == "Check a File":
                     status_filter = st.multiselect(
                         "Filter by status",
                         options=["Exact Match", "Partial Match", "No Match"],
-                        default=["Exact Match", "Partial Match", "No Match"],
+                        default=["Exact Match", "Partial Match", "No Match"]
                     )
                 with filter_col2:
                     min_score = st.slider("Minimum match score (%)", 0, 100, 0)
 
                 filtered_df = results_df[
-                    results_df["Status"].isin(status_filter)
-                    & (results_df["Match Score (%)"] >= min_score)
+                    results_df["Status"].isin(status_filter) &
+                    (results_df["Match Score (%)"] >= min_score)
                 ]
 
                 summary = results_df["Status"].value_counts()
@@ -306,16 +315,13 @@ elif page == "Check a File":
                     }.get(row["Status"], "")
                     return [color] * len(row)
 
-                st.dataframe(
-                    filtered_df.style.apply(highlight_status, axis=1),
-                    use_container_width=True,
-                )
+                st.dataframe(filtered_df.style.apply(highlight_status, axis=1), use_container_width=True)
 
                 st.download_button(
                     "Download filtered results as Excel",
                     data=to_excel_bytes(filtered_df),
                     file_name="cross_check_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
 
@@ -325,7 +331,7 @@ elif page == "View Database":
 
     tables = list_tables()
     if not tables:
-        st.info("Database is empty. Go to 'Import Data' first.")
+        st.info("Database is empty. Go to 'Import / Update Reference Data' first.")
     else:
         table_name = st.selectbox("Table to view", tables)
         total_rows = table_row_count(table_name)
@@ -333,8 +339,12 @@ elif page == "View Database":
 
         search_term = st.text_input(
             "Search (matches any column, case-insensitive)",
-            placeholder="e.g. a name, barangay, or project",
+            placeholder="e.g. a name, barangay, or project"
         )
+
+        @st.cache_data(ttl=300)
+        def load_full_table(name):
+            return pd.read_sql(f'SELECT * FROM "{name}"', engine)
 
         df_full = load_full_table(table_name)
 
@@ -353,5 +363,12 @@ elif page == "View Database":
             "Download this view as Excel",
             data=to_excel_bytes(df_display),
             file_name=f"{table_name}_export.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+# ---------------------------------------------------------------------------
+# secrets.toml format (for local testing only - on Streamlit Cloud this goes
+# in the app's Settings -> Secrets instead, as TOML text):
+#
+# DB_URL = "postgresql://postgres:[YOUR-PASSWORD]@[YOUR-HOST]:5432/postgres"
+# ---------------------------------------------------------------------------

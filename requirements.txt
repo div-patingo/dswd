@@ -4,3 +4,5 @@ openpyxl
 rapidfuzz
 sqlalchemy
 psycopg2-binary
+streamlit-option-menu
+psycopg[binary]

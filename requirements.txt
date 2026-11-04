@@ -1,7 +1,8 @@
-streamlit==1.40.2
+streamlit
 pandas
 openpyxl
 rapidfuzz
 sqlalchemy
 psycopg2-binary
-streamlit-option-menu==0.4.0
+streamlit-option-menu
+psycopg[binary]
